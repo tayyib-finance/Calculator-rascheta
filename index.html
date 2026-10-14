@@ -1,0 +1,130 @@
+import streamlit as st
+import pandas as pd
+
+st.set_page_config(page_title="Исламский Авто-Калькулятор", layout="wide")
+
+st.title("🚗 Калькулятор Исламской Рассрочки (Мурабаха)")
+st.subheader("Сравнение моделей на 5 месяцев (2 круга) и 10 месяцев (1 круг) с реинвестированием взносов")
+
+# --- БОКОВАЯ ПАНЕЛЬ ДЛЯ ВВОДА ДАННЫХ ---
+st.sidebar.header("📊 Настройки Фонда и Автомобилей")
+
+capital = st.sidebar.number_input("Стартовый капитал фонда, ₽", min_value=100000, value=2000000, step=100000)
+car_price = st.sidebar.number_input("Цена закупки одного авто, ₽", min_value=50000, value=200000, step=10000)
+down_payment = st.sidebar.number_input("Первоначальный взнос с клиента, ₽", min_value=0, value=50000, step=5000)
+monthly_pct = st.sidebar.number_input("Ежемесячная наценка, %", min_value=0.0, value=5.0, step=0.5)
+
+# Расчет чистых затрат фонда на 1 машину
+net_car_cost = car_price - down_payment
+
+st.sidebar.markdown(f"**Чистые затраты фонда на 1 авто:** {net_car_cost:,} ₽")
+
+if net_car_cost <= 0:
+    st.error("Ошибка: Первоначальный взнос не может быть больше или равен цене машины!")
+    st.stop()
+
+# --- ФУНКЦИЯ РАСЧЕТА КРУГА (для 5 месяцев) ---
+def calculate_5_months_cycle(start_capital):
+    # Сколько машин можно купить по факту с учетом мгновенного возврата взносов
+    # Формула: (Стартовый капитал - Цена авто) / Чистые затраты + 1
+    # Но мы считаем строго поштучно в цикле, как в реальной жизни:
+    current_cash = start_capital
+    cars_bought = 0
+    
+    # Симуляция закупки на старте круга
+    while current_cash >= car_price:
+        current_cash -= car_price
+        current_cash += down_payment
+        cars_bought += 1
+        
+    # Дозакупка на остаток, если он покрывает чистые затраты (клиент доносит взнос)
+    if current_cash >= net_car_cost:
+        current_cash -= net_car_cost
+        cars_bought += 1
+        
+    # Расчет выплат за 5 месяцев (наценка 25% от долга)
+    pct_5_months = monthly_pct * 5 / 100
+    total_debt_per_car = (car_price - down_payment) * (1 + pct_5_months)
+    
+    monthly_payment = total_debt_per_car / 5
+    total_received_from_cars = cars_bought * total_debt_per_car
+    
+    end_capital = current_cash + total_received_from_cars
+    return cars_bought, end_capital, monthly_payment
+
+# --- РАСЧЕТ ВАРИАНТА 1: 5 месяцев (2 круга) ---
+# Круг 1
+cars_k1, cap_end_k1, pay_k1 = calculate_5_months_cycle(capital)
+# Круг 2
+cars_k2, cap_end_k2, pay_k2 = calculate_5_months_cycle(cap_end_k1)
+
+profit_5_months = cap_end_k2 - capital
+
+# --- РАСЧЕТ ВАРИАНТА 2: 10 месяцев (1 круг) ---
+# На старте покупаем столько же, сколько в первом круге 5-месячной модели
+cars_10m = cars_k1
+cash_rem_10m = capital - (cars_10m * car_price) + (cars_10m * down_payment)
+
+pct_10_months = monthly_pct * 10 / 100
+debt_10m_per_car = (car_price - down_payment) * (1 + pct_10_months)
+pay_10m = debt_10m_per_car / 10
+
+# Базовая сумма от 13 стартовых машин к концу 10 месяцев
+total_from_initial_cars = cars_10m * debt_10m_per_car
+
+# Упрощенный учет реинвестирования ежемесячных платежей в процессе 10 месяцев
+# Каждый месяц капает поток, на него покупаются новые машины
+monthly_stream = cars_10m * pay_10m
+reinvested_cars_profit = (monthly_stream * 5) * 0.35 # Коэффициент успевающих отработать машин
+
+cap_end_10m = cash_rem_10m + total_from_initial_cars + reinvested_cars_profit
+profit_10_months = cap_end_10m - capital
+
+# --- ВЫВОД РЕЗУЛЬТАТОВ ---
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### 🟢 Вариант 1: Срок 5 месяцев (2 круга)")
+    st.metric("Чистая прибыль", f"{int(profit_5_months):,} ₽")
+    st.write(f"**Итоговый капитал:** {int(cap_end_k2):,} ₽")
+    st.write(f"**Машин в 1-м круге:** {cars_k1} шт. (Платеж: {int(pay_k1):,} ₽/мес)")
+    st.write(f"**Машин во 2-м круге:** {cars_k2} шт. (Платеж: {int(pay_k2):,} ₽/мес)")
+    st.info("💡 Преимущество: Быстрый возврат денег, минимальный риск ДТП, высокая ликвидность.")
+
+with col2:
+    st.markdown("### ⏱️ Вариант 2: Срок 10 месяцев (1 круг)")
+    st.metric("Чистая прибыль (с реинвестом)", f"{int(profit_10_months):,} ₽")
+    st.write(f"**Итоговый капитал:** {int(cap_end_10m):,} ₽")
+    st.write(f"**Машин на старте:** {cars_10m} шт.")
+    st.write(f"**Ежемесячный платеж:** {int(pay_10m):,} ₽/мес")
+    st.warning("⚠️ Риски: Деньги заморожены на 10 месяцев в дешевых авто. Высокие требования к проверке водителей.")
+
+# --- СРАВНИТЕЛЬНАЯ ТАБЛИЦА ---
+st.markdown("### 📊 Прямое сравнение параметров")
+
+data = {
+    "Параметр": [
+        "Стартовые машины", 
+        "Фиксированная наценка на 1 авто", 
+        "Ежемесячный платеж с 1 авто", 
+        "Чистая прибыль за весь срок", 
+        "Итоговый капитал фонда"
+    ],
+    "Модель 5 месяцев (2 круга)": [
+        f"{cars_k1} шт. ➡️ {cars_k2} шт.",
+        f"{monthly_pct * 5}% ({int((car_price-down_payment)*monthly_pct*5/100):,} ₽)",
+        f"{int(pay_k1):,} ₽",
+        f"{int(profit_5_months):,} ₽",
+        f"{int(cap_end_k2):,} ₽"
+    ],
+    "Модель 10 месяцев (1 круг)": [
+        f"{cars_10m} шт. (+ дозакупки)",
+        f"{monthly_pct * 10}% ({int((car_price-down_payment)*monthly_pct*10/100):,} ₽)",
+        f"{int(pay_10m):,} ₽",
+        f"{int(profit_10_months):,} ₽",
+        f"{int(cap_end_10m):,} ₽"
+    ]
+}
+
+df = pd.DataFrame(data)
+st.table(df)
